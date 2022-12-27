@@ -17,6 +17,12 @@ jobs:
       
       - name : Checkout
         uses: actions/checkout@v1
+        with: 
+            submodules: 'true'
+      
+      - name : BuildSDL
+        run: |
+          MSBuild.exe SDL\VisualC\SDL.sln /p:Configuration=Release /p:Platform=x64 -m /target:SDL3
         
       - name : Build
         run: |

@@ -21,5 +21,8 @@
     <ClCompile Include="FastCrc32C.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="EndianCvt.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

@@ -1,7 +1,12 @@
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef _WIN32
 #include <immintrin.h>
+#elif defined (__GNUC__) && defined (__x86_64__) || defined (__i386__)
+#include <nmmintrin.h>
+#else
+#error Not supported yet
 #endif
 
 #define INTRIN_CRC32_64(crc, data) _mm_crc32_u64(crc, data)
@@ -11,10 +16,10 @@
 
 
 uint32_t CRC32C(unsigned char* data, size_t dataSize) {
-	uint32_t ret = 0xFFFFFFFF;
+	uint32_t ret = -1;
 	int64_t sizeSigned = dataSize;
 
-#ifdef _M_X64
+#if defined(_M_X64) || defined(__x86_64__)
 	while ((sizeSigned -= sizeof(uint64_t)) >= 0) {
 		ret = (uint32_t)_mm_crc32_u64(ret, *(uint64_t*)data);
 		data += sizeof(uint64_t);
@@ -24,7 +29,7 @@ uint32_t CRC32C(unsigned char* data, size_t dataSize) {
 		ret = _mm_crc32_u32(ret, *(uint32_t*)data);
 		data += sizeof(uint32_t);
 	}
-#elif _M_IX86
+#elif defined(_M_IX86) || defined(__i386__)
 	while ((sizeSigned -= sizeof(uint32_t)) >= 0) {
 		ret = (uint32_t)_mm_crc32_u32(ret, *(uint32_t*)data);
 		data += sizeof(uint32_t);
