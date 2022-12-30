@@ -13,6 +13,12 @@
 #define MAX_PATH 260
 #endif
 
+#if defined(_MSC_VER)
+#define ASSUME(x) __assume(x)
+#else
+#define ASSUME(x) 
+#endif
+
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -109,15 +115,32 @@ static void SetupBox(SDL_MessageBoxData* boxData, SDL_MessageBoxButtonData butto
     boxData->buttons = buttonData;
 }
 #ifdef _WIN32
-static void OpenFileBox(char* path) {
+static void OpenFileBox(char* path, size_t pathSize) {
     OPENFILENAMEA box = { 0 };
     path[0] = 0;
     box.lStructSize = sizeof(box);
     box.lpstrFile = path;
-    box.nMaxFile = sizeof(path);
+    box.nMaxFile = static_cast<DWORD>(pathSize);
     box.lpstrTitle = "Open ROM";
     box.Flags = OFN_ENABLESIZING | OFN_FILEMUSTEXIST | OFN_LONGNAMES | OFN_PATHMUSTEXIST;
-    GetOpenFileNameA(&box);
+    if (!GetOpenFileNameA(&box)) {
+        ((uint64_t*)path)[0] = 0;
+        DWORD err = CommDlgExtendedError();
+        const char* errStr = nullptr;
+        switch (err) { 
+            case FNERR_BUFFERTOOSMALL:
+                errStr = "Path buffer too small. Move file closer to root of your drive";
+                break;
+            case FNERR_INVALIDFILENAME:
+                errStr = "File name for rom provided is invalid.";
+                break;
+            case FNERR_SUBCLASSFAILURE:
+                errStr = "Failed to open a filebox because there is not enough RAM to do so.";
+                break;
+        }
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Box error", errStr, nullptr);
+
+    }
 }
 #endif
 
@@ -189,6 +212,7 @@ template <typename T> static void OpenFile(std::ifstream& fstream, const T& path
     }
     fstream.open(path, std::ios::in | std::ios::binary);
     if (!fstream.is_open()) { /*TODO: Handle errors*/
+
     }
 }
 
@@ -207,6 +231,21 @@ static bool CheckFileSize(size_t fileSize) {
     return true;
 }
 
+static const char* GetZapdVerStr(void* romData) {
+    uint32_t crc = GetRomVerCrc(romData);
+    switch (crc) {
+        case OOT_PAL_GC:
+            return "GC_NMQ_PAL_F";
+        case OOT_PAL_GC_DBG1:
+            return "GC_NMQ_D";
+        case OOT_PAL_GC_MQ_DBG:
+            return "GC_MQ_D";
+        default:
+            // We should never be in a state where this path happens.
+            ASSUME(0);
+    }
+}
+
 int main(void) {
     SDL_MessageBoxData boxData = { 0 };
     SDL_MessageBoxButtonData buttons[3] = { { 0 } };
@@ -215,6 +254,7 @@ int main(void) {
     uint32_t verCrc;
     std::ifstream inFile;
     void* romData = operator new(MB64);
+    std::filesystem::path::string_type pathToRom;
 
     for (const auto& file : std::filesystem::directory_iterator("R:\\")) {
         if (file.is_directory())
@@ -247,6 +287,7 @@ int main(void) {
             continue;
         }
         textBoxBuffer[0] = 0;
+        //WideCharToMultiByte(CP_UTF8, 0, rom.c_str(), -1, test, sizeof(test), nullptr, nullptr);
         snprintf(textBoxBuffer, sizeof(textBoxBuffer),
                  "Rom detected: %ls, Header CRC32: %8X. It appears to be: %s. Use this rom?", rom.c_str(), verCrc,
                  verMap.at(verCrc));
@@ -258,21 +299,28 @@ int main(void) {
                 ShowCrcErrorBox();
                 continue;
             }
+            pathToRom = rom.c_str();
             break;
         }
 #ifdef _WIN32
         else if (messageBoxRet == (int)ButtonId::FIND) {
-            char newPath[MAX_PATH];
-            OpenFileBox(newPath);
+            std::array<char, MAX_PATH> newPath;
+            OpenFileBox(newPath.data(), std::size(newPath));
             if (newPath[0] == 0) {
-                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom provided", "No rom provided.", nullptr);
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom selected", "No rom selected.", nullptr);
+                break;
             }
-            OpenFile(inFile, newPath);
-            fileSize = GetFileSize(newPath);
+            OpenFile(inFile, newPath.data());
+            fileSize = GetFileSize(newPath.data());
             if (!CheckFileSize(fileSize)) {
-                ShowSizeErrorBox(textBoxBuffer, fileSize, newPath);
+                ShowSizeErrorBox(textBoxBuffer, fileSize, newPath.data());
             }
-            ValidateAndFixRom(romData, fileSize);
+            if (!ValidateAndFixRom(romData, fileSize)) {
+                inFile.close();
+                ShowCrcErrorBox();
+                operator delete(romData);
+                exit(1);
+            }
         }
 #endif
         else if (messageBoxRet == (int)ButtonId::NO) {
@@ -285,6 +333,9 @@ int main(void) {
             continue;
         }
     }
+
+
+
     inFile.close();
     operator delete(romData);
     return 0;
