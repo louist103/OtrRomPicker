@@ -162,6 +162,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="EndianCvt.c" />
+    <ClCompile Include="Extract.cpp" />
     <ClCompile Include="FastCrc32C.c" />
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
