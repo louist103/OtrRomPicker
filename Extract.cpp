@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <winuser.h>
+#include <shlwapi.h>
+#pragma comment(lib, "Shlwapi.lib")
 #endif
 
 #if __has_include(<byteswap.h>)
@@ -110,12 +112,10 @@ enum class MsgBoxType : int {
 };
 
 class Extractor {
-    std::unique_ptr<unsigned char[]> mRomData;
+    std::unique_ptr<unsigned char[]> mRomData = std::make_unique<unsigned char[]>(MB64);
     FsPath mCurrentRomPath;
-    
-    size_t mCurRomSize;
+    size_t mCurRomSize = 0;
 
-    
 #ifdef _WIN32
     bool GetRomPathFromBox();
 #endif
@@ -129,9 +129,56 @@ class Extractor {
     void CallZapd();
 
     int CreateYesNoBox();
+    void SetRomInfo(const FsPath& path);
 
+    void GetRoms(std::vector<FsPath>& roms);
+    void ShowSizeErrorBox();
+
+  public:
     bool Run();
 };
+
+void Extractor::ShowSizeErrorBox() {
+    char boxBuffer[MAX_PATH + 100];
+#ifdef _WIN32
+    snprintf(boxBuffer, MAX_PATH, "The rom file %ls was not a valid size. Was %zu MB, expecting 32, 54, or 64MB.",
+             mCurrentRomPath.c_str(), mCurRomSize / MB_BASE);
+    MessageBoxA(nullptr, boxBuffer, "Invalid Rom Size", MB_ICONERROR | MB_OK);
+#else
+    snprintf(boxBuffer, MAX_PATH, "The rom file %s was not a valid size. Was %zu MB, expecting 32, 54, or 64MB.",
+             mCurrentRomPath.c_str(), mCurRomSize / MB_BASE);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Invalid Rom Size", boxBuffer, nullptr);
+#endif
+}
+
+void Extractor::SetRomInfo(const FsPath& path) {
+    mCurrentRomPath = path;
+    mCurRomSize = GetCurRomSize();
+}
+
+void Extractor::GetRoms(std::vector<FsPath>& roms) {
+#ifdef _WIN32
+    WIN32_FIND_DATA ffd;
+    HANDLE h = FindFirstFile(L"\\*", &ffd);
+
+    do {
+        if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            wchar_t* ext = PathFindExtension(ffd.cFileName);
+            if ((wcscmp(ext, L".z64") == 0) || (wcscmp(ext, L".v64") == 0) || (wcscmp(ext, L".n64") == 0))
+                roms.push_back(ffd.cFileName);
+        }
+    } while (FindNextFile(h, &ffd) != 0);
+#else
+    for (const auto& file : std::filesystem::directory_iterator("R:\\")) {
+        if (file.is_directory())
+            continue;
+        if ((file.path().extension() == ".n64") || (file.path().extension() == ".z64") ||
+            (file.path().extension() == ".v64")) {
+            roms.push_back((file.path()));
+        }
+    }
+#endif
+}
 
 bool Extractor::GetRomPathFromBox() {
     OPENFILENAME box = { 0 };
@@ -161,11 +208,12 @@ bool Extractor::GetRomPathFromBox() {
         MessageBoxA(nullptr, "Box Error", errStr, MB_OK | MB_ICONERROR);
         return false;
     }
-    //The box was closed without something being selected.
+    // The box was closed without something being selected.
     if (nameBuffer[0] == 0) {
         return false;
     }
     mCurrentRomPath = nameBuffer;
+    mCurRomSize = GetCurRomSize();
     return true;
 }
 
@@ -201,36 +249,56 @@ bool Extractor::ValidateRomSize() {
 bool Extractor::Run() {
     std::vector<FsPath> roms;
     std::ifstream inFile;
+    uint32_t verCrc;
 
-    for (const auto& file : std::filesystem::directory_iterator("R:\\")) {
-        if (file.is_directory())
-            continue;
-        if ((file.path().extension() == ".n64") || (file.path().extension() == ".z64") ||
-            (file.path().extension() == ".v64")) {
-            roms.push_back((file.path()));
-        }
-    }
+    GetRoms(roms);
 
     if (roms.empty()) {
 #ifdef _WIN32
         int ret = MessageBox(nullptr, L"No roms found in this folder. Search for one somewhere else?", L"No roms found",
                              MB_YESNO | MB_ICONERROR);
-        if (ret == IDYES) {
-            if (!GetRomPathFromBox()) {
+        switch (ret) {
+            case IDYES:
+                if (!GetRomPathFromBox()) {
+                    return false;
+                }
+                inFile.open(mCurrentRomPath);
+                if (!inFile.is_open()) {
+                    return false; // TODO Handle error
+                }
+                inFile.read((char*)mRomData.get(), mCurRomSize);
+                if (!ValidateRomSize()) {
+                    return false;
+                }
+                if (!ValidateAndFixRom()) {
+                    return false;
+                }
+                break;
+            case IDNO:
                 return false;
-            }
-        } else if (ret == IDNO) {
-            return false;
+            default:
+                ASSUME(0);
         }
-// ShowYesNoBox("No roms found", "No roms found in this folder. Search for one?")
 #else
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No roms found",
                                  "No roms found in this folder. Please move one here.", nullptr);
 #endif
     }
 
-}
+    for (const auto& rom : roms) {
+        SetRomInfo(rom);
+        if (!ValidateRomSize()) {
+            ShowSizeErrorBox();
+            continue;
+        }
+        inFile.read((char*)mRomData.get(), mCurRomSize);
+        RomToBigEndian(mRomData.get(), mCurRomSize);
+        verCrc = GetRomVerCrc();
 
+        if (!verMap.contains(verCrc)) {
+        }
+    }
+}
 
 bool Extractor::IsMasterQuest() {
     switch (GetRomVerCrc()) {
@@ -254,4 +322,9 @@ const char* Extractor::GetZapdVerStr() {
             // We should never be in a state where this path happens.
             ASSUME(0);
     }
+}
+
+int main() {
+    Extractor e;
+    e.Run();
 }

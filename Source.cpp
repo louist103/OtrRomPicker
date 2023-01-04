@@ -1,3 +1,4 @@
+#if 0
 #ifdef _WIN32
 #include <Windows.h>
 #include <winuser.h>
@@ -396,3 +397,4 @@ int main(void) {
     inFile.close();
     return 0;
 }
+#endif
