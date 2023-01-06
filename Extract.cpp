@@ -1,9 +1,12 @@
 #ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
 #include <Windows.h>
 #include <winuser.h>
 #include <shlwapi.h>
 #pragma comment(lib, "Shlwapi.lib")
 #endif
+
+#include <sys/stat.h>
 
 #if __has_include(<byteswap.h>)
 #include "byteswap.h"
@@ -124,6 +127,7 @@ class Extractor {
     size_t GetCurRomSize();
     bool ValidateAndFixRom();
     bool ValidateRomSize();
+    bool ValidateRom();
     const char* GetZapdVerStr();
     bool IsMasterQuest();
     void CallZapd();
@@ -133,6 +137,8 @@ class Extractor {
 
     void GetRoms(std::vector<FsPath>& roms);
     void ShowSizeErrorBox();
+    void ShowCrcErrorBox();
+    int ShowRomPickBox(uint32_t verCrc);
 
   public:
     bool Run();
@@ -149,6 +155,41 @@ void Extractor::ShowSizeErrorBox() {
              mCurrentRomPath.c_str(), mCurRomSize / MB_BASE);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Invalid Rom Size", boxBuffer, nullptr);
 #endif
+}
+
+void Extractor::ShowCrcErrorBox() {
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Rom CRC invalid",
+                             "Rom CRC did not match the list of known good roms. Please find another.", nullptr);
+}
+
+int Extractor::ShowRomPickBox(uint32_t verCrc) {
+    char buffer[MAX_PATH + 100];
+    SDL_MessageBoxData boxData = { 0 };
+    SDL_MessageBoxButtonData buttons[3] = { { 0 } };
+    int ret;
+
+    buttons[0].buttonid = 0;
+    buttons[0].text = "Yes";
+    buttons[1].buttonid = 1;
+    buttons[1].text = "No";
+    boxData.numbuttons = 2;
+// TODO: File box on other platforms.
+#ifdef _WIN32
+    buttons[2].buttonid = 2;
+    buttons[2].text = "Find ROM";
+    boxData.numbuttons = 3;
+#endif
+    boxData.flags = SDL_MESSAGEBOX_INFORMATION;
+    boxData.message = buffer;
+    boxData.title = "Rom Detected";
+    boxData.window = nullptr;
+
+    boxData.buttons = buttons;
+
+    snprintf(buffer, sizeof(buffer), "Rom detected: %ls, Header CRC32: %8X. It appears to be: %s. Use this rom?",
+             mCurrentRomPath.c_str(), verCrc, verMap.at(verCrc));
+    SDL_ShowMessageBox(&boxData, &ret);
+    return ret;
 }
 
 void Extractor::SetRomInfo(const FsPath& path) {
@@ -190,23 +231,26 @@ bool Extractor::GetRomPathFromBox() {
     box.nMaxFile = sizeof(nameBuffer) / sizeof(nameBuffer[0]);
     box.lpstrTitle = L"Open Rom";
     box.Flags = OFN_ENABLESIZING | OFN_FILEMUSTEXIST | OFN_LONGNAMES | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-    box.lpstrFilter = L"N64 Roms\0.z64;.v64;.n64\0\0";
+    box.lpstrFilter = L"N64 Roms\0*.z64;*.v64;*.n64\0\0";
     if (!GetOpenFileName(&box)) {
         DWORD err = CommDlgExtendedError();
-        const char* errStr = nullptr;
-        switch (err) {
-            case FNERR_BUFFERTOOSMALL:
-                errStr = "Path buffer too small. Move file closer to root of your drive";
-                break;
-            case FNERR_INVALIDFILENAME:
-                errStr = "File name for rom provided is invalid.";
-                break;
-            case FNERR_SUBCLASSFAILURE:
-                errStr = "Failed to open a filebox because there is not enough RAM to do so.";
-                break;
+        // GetOpenFileName will return 0 but no error is set if the user just closes the box.
+        if (err != 0) {
+            const char* errStr = nullptr;
+            switch (err) {
+                case FNERR_BUFFERTOOSMALL:
+                    errStr = "Path buffer too small. Move file closer to root of your drive";
+                    break;
+                case FNERR_INVALIDFILENAME:
+                    errStr = "File name for rom provided is invalid.";
+                    break;
+                case FNERR_SUBCLASSFAILURE:
+                    errStr = "Failed to open a filebox because there is not enough RAM to do so.";
+                    break;
+            }
+            MessageBoxA(nullptr, "Box Error", errStr, MB_OK | MB_ICONERROR);
+            return false;
         }
-        MessageBoxA(nullptr, "Box Error", errStr, MB_OK | MB_ICONERROR);
-        return false;
     }
     // The box was closed without something being selected.
     if (nameBuffer[0] == 0) {
@@ -246,6 +290,18 @@ bool Extractor::ValidateRomSize() {
     return true;
 }
 
+bool Extractor::ValidateRom() {
+    if (!ValidateRomSize()) {
+        ShowSizeErrorBox();
+        return false;
+    }
+    if (!ValidateAndFixRom()) {
+        ShowCrcErrorBox();
+        return false;
+    }
+    return true;
+}
+
 bool Extractor::Run() {
     std::vector<FsPath> roms;
     std::ifstream inFile;
@@ -255,14 +311,15 @@ bool Extractor::Run() {
 
     if (roms.empty()) {
 #ifdef _WIN32
-        int ret = MessageBox(nullptr, L"No roms found in this folder. Search for one somewhere else?", L"No roms found",
-                             MB_YESNO | MB_ICONERROR);
+        int ret = MessageBoxA(nullptr, "No roms found in this folder. Search for one somewhere else?", "No roms found",
+                              MB_YESNO | MB_ICONERROR);
         switch (ret) {
             case IDYES:
                 if (!GetRomPathFromBox()) {
+                    MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
                     return false;
                 }
-                inFile.open(mCurrentRomPath);
+                inFile.open(mCurrentRomPath, std::ios::in | std::ios::binary);
                 if (!inFile.is_open()) {
                     return false; // TODO Handle error
                 }
@@ -286,7 +343,12 @@ bool Extractor::Run() {
     }
 
     for (const auto& rom : roms) {
+        int option;
         SetRomInfo(rom);
+        if (!inFile.is_open()) {
+            inFile.close();
+        }
+        inFile.open(rom, std::ios::in | std::ios::binary);
         if (!ValidateRomSize()) {
             ShowSizeErrorBox();
             continue;
@@ -295,8 +357,39 @@ bool Extractor::Run() {
         RomToBigEndian(mRomData.get(), mCurRomSize);
         verCrc = GetRomVerCrc();
 
+        // Rom doesn't claim to be valid
         if (!verMap.contains(verCrc)) {
+            continue;
         }
+        option = ShowRomPickBox(verCrc);
+        if (option == (int)ButtonId::YES) {
+            if (!ValidateRom()) {
+                continue;
+            }
+            break;
+        } else if (option == (int)ButtonId::FIND) {
+            if (!GetRomPathFromBox()) {
+                MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
+                return false;
+            }
+            inFile.open(mCurrentRomPath, std::ios::in | std::ios::binary);
+            if (!inFile.is_open()) {
+                return false; // TODO Handle error
+            }
+            inFile.read((char*)mRomData.get(), mCurRomSize);
+            if (!ValidateRom()) {
+                return false;
+            }
+            break;
+        } else if (option == (int)ButtonId::NO) {
+            inFile.close();
+            if (rom == roms.back()) {
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom provided", "No rom provided. Exiting", nullptr);
+                return false;
+            }
+            continue;
+        }
+        break;
     }
 }
 
