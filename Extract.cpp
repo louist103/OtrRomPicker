@@ -127,7 +127,8 @@ class Extractor {
     size_t GetCurRomSize();
     bool ValidateAndFixRom();
     bool ValidateRomSize();
-    bool ValidateRom();
+
+    bool ValidateRom(bool skipCrcBox = false);
     const char* GetZapdVerStr();
     bool IsMasterQuest();
     void CallZapd();
@@ -142,6 +143,7 @@ class Extractor {
 
   public:
     bool Run();
+    const char* GetZapdStr();
 };
 
 void Extractor::ShowSizeErrorBox() {
@@ -170,8 +172,10 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) {
 
     buttons[0].buttonid = 0;
     buttons[0].text = "Yes";
+    buttons[0].flags = SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT;
     buttons[1].buttonid = 1;
     buttons[1].text = "No";
+    buttons[1].flags = SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT;
     boxData.numbuttons = 2;
 // TODO: File box on other platforms.
 #ifdef _WIN32
@@ -290,13 +294,15 @@ bool Extractor::ValidateRomSize() {
     return true;
 }
 
-bool Extractor::ValidateRom() {
+bool Extractor::ValidateRom(bool skipCrcTextBox) {
     if (!ValidateRomSize()) {
         ShowSizeErrorBox();
         return false;
     }
     if (!ValidateAndFixRom()) {
-        ShowCrcErrorBox();
+        if (!skipCrcTextBox) {
+            ShowCrcErrorBox();
+        }
         return false;
     }
     return true;
@@ -324,10 +330,7 @@ bool Extractor::Run() {
                     return false; // TODO Handle error
                 }
                 inFile.read((char*)mRomData.get(), mCurRomSize);
-                if (!ValidateRomSize()) {
-                    return false;
-                }
-                if (!ValidateAndFixRom()) {
+                if (!ValidateRom()) {
                     return false;
                 }
                 break;
@@ -345,7 +348,7 @@ bool Extractor::Run() {
     for (const auto& rom : roms) {
         int option;
         SetRomInfo(rom);
-        if (!inFile.is_open()) {
+        if (inFile.is_open()) {
             inFile.close();
         }
         inFile.open(rom, std::ios::in | std::ios::binary);
@@ -361,9 +364,17 @@ bool Extractor::Run() {
         if (!verMap.contains(verCrc)) {
             continue;
         }
+
         option = ShowRomPickBox(verCrc);
         if (option == (int)ButtonId::YES) {
-            if (!ValidateRom()) {
+            if (!ValidateRom(true)) {
+                if (rom == roms.back()) {
+                    ShowCrcErrorBox();
+                } else {
+                    SDL_ShowSimpleMessageBox(
+                        SDL_MESSAGEBOX_ERROR, "Rom CRC invalid",
+                        "Rom CRC did not match the list of known good roms. Trying the next one...", nullptr);
+                }
                 continue;
             }
             break;
@@ -391,6 +402,7 @@ bool Extractor::Run() {
         }
         break;
     }
+    return true;
 }
 
 bool Extractor::IsMasterQuest() {
@@ -417,7 +429,24 @@ const char* Extractor::GetZapdVerStr() {
     }
 }
 
+const char* Extractor::GetZapdStr() {
+    constexpr size_t ZAPD_STR_SIZE = 1024;
+    char* zapdCall = new char[ZAPD_STR_SIZE];
+    const char* verStr = GetZapdVerStr();
+
+    // TODO anything would be better than this
+    snprintf(
+        zapdCall, ZAPD_STR_SIZE,
+        "ed -i assets/extractor/xmls/%s -b %ls -fl assets/extractor/filelists -o placeholder -osf placeholder -gsf "
+        "1 -rconf assets/extractor/Config_%s.xml -se OTR --otrfile %s",
+        verStr, mCurrentRomPath.c_str(), verStr, IsMasterQuest() ? "oot-mq.otr" : "oot.otr");
+
+    return zapdCall;
+}
+
 int main() {
     Extractor e;
-    e.Run();
+    bool valid = e.Run();
+    const char* zapd = e.GetZapdStr();
+    printf("ZAPD: %s", zapd);
 }
