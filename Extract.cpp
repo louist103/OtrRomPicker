@@ -214,7 +214,7 @@ void Extractor::GetRoms(std::vector<FsPath>& roms) {
         }
     } while (FindNextFile(h, &ffd) != 0);
 #else
-    for (const auto& file : std::filesystem::directory_iterator("R:\\")) {
+    for (const auto& file : std::filesystem::directory_iterator("./")) {
         if (file.is_directory())
             continue;
         if ((file.path().extension() == ".n64") || (file.path().extension() == ".z64") ||
@@ -225,6 +225,7 @@ void Extractor::GetRoms(std::vector<FsPath>& roms) {
 #endif
 }
 
+#ifdef _WIN32
 bool Extractor::GetRomPathFromBox() {
     OPENFILENAME box = { 0 };
     wchar_t nameBuffer[512];
@@ -264,7 +265,7 @@ bool Extractor::GetRomPathFromBox() {
     mCurRomSize = GetCurRomSize();
     return true;
 }
-
+#endif
 uint32_t Extractor::GetRomVerCrc() {
     return _byteswap_ulong(((uint32_t*)mRomData.get())[4]);
 }
@@ -378,7 +379,9 @@ bool Extractor::Run() {
                 continue;
             }
             break;
-        } else if (option == (int)ButtonId::FIND) {
+        } 
+#ifdef _WIN32
+else if (option == (int)ButtonId::FIND) {
             if (!GetRomPathFromBox()) {
                 MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
                 return false;
@@ -392,7 +395,9 @@ bool Extractor::Run() {
                 return false;
             }
             break;
-        } else if (option == (int)ButtonId::NO) {
+}
+#endif
+         else if (option == (int)ButtonId::NO) {
             inFile.close();
             if (rom == roms.back()) {
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom provided", "No rom provided. Exiting", nullptr);

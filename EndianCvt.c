@@ -10,6 +10,9 @@
 #define BSWAP16 _byteswap_ushort
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void RomToBigEndian(void* rom, size_t romSize) {
     uint8_t firstbyte = ((uint8_t*)rom)[0];
 
@@ -27,3 +30,7 @@ void RomToBigEndian(void* rom, size_t romSize) {
             }
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
