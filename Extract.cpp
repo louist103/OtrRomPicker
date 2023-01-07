@@ -193,9 +193,14 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) {
     boxData.window = nullptr;
 
     boxData.buttons = buttons;
-
+#ifdef _WIN32
     snprintf(buffer, sizeof(buffer), "Rom detected: %ls, Header CRC32: %8X. It appears to be: %s. Use this rom?",
              mCurrentRomPath.c_str(), verCrc, verMap.at(verCrc));
+#else
+    snprintf(buffer, sizeof(buffer), "Rom detected: %s, Header CRC32: %8X. It appears to be: %s. Use this rom?",
+             mCurrentRomPath.c_str(), verCrc, verMap.at(verCrc));
+#endif
+
     SDL_ShowMessageBox(&boxData, &ret);
     return ret;
 }
@@ -443,12 +448,19 @@ const char* Extractor::GetZapdStr() {
     char* zapdCall = new char[ZAPD_STR_SIZE];
     const char* verStr = GetZapdVerStr();
 
-    // TODO anything would be better than this
+// TODO anything would be better than this
+#ifdef _WIN32
     snprintf(
         zapdCall, ZAPD_STR_SIZE,
         "ed -i assets/extractor/xmls/%s -b %ls -fl assets/extractor/filelists -o placeholder -osf placeholder -gsf "
         "1 -rconf assets/extractor/Config_%s.xml -se OTR --otrfile %s",
         verStr, mCurrentRomPath.c_str(), verStr, IsMasterQuest() ? "oot-mq.otr" : "oot.otr");
+#else
+    snprintf(zapdCall, ZAPD_STR_SIZE,
+             "ed -i assets/extractor/xmls/%s -b %s -fl assets/extractor/filelists -o placeholder -osf placeholder -gsf "
+             "1 -rconf assets/extractor/Config_%s.xml -se OTR --otrfile %s",
+             verStr, mCurrentRomPath.c_str(), verStr, IsMasterQuest() ? "oot-mq.otr" : "oot.otr");
+#endif
 
     return zapdCall;
 }
