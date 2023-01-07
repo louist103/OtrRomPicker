@@ -6,8 +6,6 @@
 #pragma comment(lib, "Shlwapi.lib")
 #endif
 
-#include <sys/stat.h>
-
 #if __has_include(<byteswap.h>)
 #include "byteswap.h"
 #define _byteswap_ulong(x) bswap_32(x)
@@ -31,8 +29,13 @@
 #define SDL_MAIN_HANDLED
 #endif
 
+#ifdef _WIN32
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_messagebox.h>
+#else
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_messagebox.h>
+#endif
 
 #include <array>
 #include <fstream>
@@ -40,6 +43,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <memory>
+#include <vector>
 
 extern "C" uint32_t CRC32C(unsigned char* data, size_t dataSize);
 extern "C" void RomToBigEndian(void* rom, size_t romSize);
@@ -379,9 +383,9 @@ bool Extractor::Run() {
                 continue;
             }
             break;
-        } 
+        }
 #ifdef _WIN32
-else if (option == (int)ButtonId::FIND) {
+        else if (option == (int)ButtonId::FIND) {
             if (!GetRomPathFromBox()) {
                 MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
                 return false;
@@ -395,9 +399,9 @@ else if (option == (int)ButtonId::FIND) {
                 return false;
             }
             break;
-}
+        }
 #endif
-         else if (option == (int)ButtonId::NO) {
+        else if (option == (int)ButtonId::NO) {
             inFile.close();
             if (rom == roms.back()) {
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom provided", "No rom provided. Exiting", nullptr);

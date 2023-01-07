@@ -7,7 +7,6 @@ on:
 jobs:
   Windows:
 
-  
     name: build-windows
     runs-on: windows-latest
     
@@ -27,3 +26,19 @@ jobs:
       - name : Build
         run: |
           MSBuild.exe Project1.sln 
+  
+  Linux:
+    name: build-linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name : Checkout
+        uses: actions/checkout@v1
+
+      - name : InstallSDL
+        run: |
+        sudo apt install libsdl2-dev
+
+      - name : Build
+        run: |
+          make -j $(nproc) 
