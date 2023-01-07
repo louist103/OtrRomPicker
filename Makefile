@@ -16,7 +16,7 @@ EXE=extract.elf
 
 all: $(EXE)
 
-mkdir -p build
+$(shell mkdir -p build)
 
 $(EXE): $(C_OBJECTS) $(CXX_OBJECTS)
 	$(CXX) $(C_OBJECTS) $(CXX_OBJECTS) -o $@ -lSDL2
