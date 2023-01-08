@@ -6,6 +6,13 @@
 #pragma comment(lib, "Shlwapi.lib")
 #endif
 
+#ifdef unix
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #if __has_include(<byteswap.h>)
 #include "byteswap.h"
 #define _byteswap_ulong(x) bswap_32(x)
@@ -18,6 +25,8 @@
 
 #if defined(_MSC_VER)
 #define ASSUME(x) __assume(x)
+#elif __llvm__
+#define ASSUME(x) __builtin_assume(x)
 #else
 #define ASSUME(x)
 #endif
@@ -222,6 +231,25 @@ void Extractor::GetRoms(std::vector<FsPath>& roms) {
                 roms.push_back(ffd.cFileName);
         }
     } while (FindNextFile(h, &ffd) != 0);
+#elif unix
+    DIR* d;
+    struct dirent* dir;
+
+    d = opendir(".");
+
+    if(d != NULL) {
+        while((dir = readdir(d)) != NULL) {
+            struct stat path;
+            stat(dir->d_name, &path);
+            if(S_ISREG(path.st_mode)) {
+                char* ext = strchr(dir->d_name, '.');
+                if(ext != NULL && strcmp(ext, ".z64") == 0) {
+                    roms.push_back(dir->d_name);
+                }
+            }
+        }
+    }
+    closedir(d);
 #else
     for (const auto& file : std::filesystem::directory_iterator("./")) {
         if (file.is_directory())
@@ -426,6 +454,8 @@ bool Extractor::IsMasterQuest() {
         case OOT_PAL_GC:
         case OOT_PAL_GC_DBG1:
             return false;
+        default:
+            ASSUME(0);
     }
 }
 
