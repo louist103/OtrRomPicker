@@ -6,6 +6,8 @@
 #pragma comment(lib, "Shlwapi.lib")
 #endif
 
+#include "portable-file-dialogs.h"
+
 #ifdef unix
 #include <dirent.h>
 #include <sys/types.h>
@@ -18,17 +20,12 @@
 #define _byteswap_ulong(x) bswap_32(x)
 #endif
 
-// Non Win32 doesn't have this defined. Define it to something I know exists and works.
-#ifndef MAX_PATH
-#define MAX_PATH 260
-#endif
-
 #if defined(_MSC_VER)
-#define ASSUME(x) __assume(x)
+#define UNREACHABLE __assume(0)
 #elif __llvm__
-#define ASSUME(x) __builtin_assume(x)
+#define UNREACHABLE __builtin_assume(0)
 #else
-#define ASSUME(x)
+#define UNREACHABLE __builtin_unreachable();
 #endif
 
 #include <stdint.h>
@@ -46,18 +43,22 @@
 #include <SDL2/SDL_messagebox.h>
 #endif
 
+#ifndef IDYES
+#define IDYES 6
+#endif
+#ifndef IDNO
+#define IDNO 7
+#endif
+
 #include <array>
 #include <fstream>
 #include <filesystem>
-#include <algorithm>
 #include <unordered_map>
 #include <memory>
 #include <vector>
 
 extern "C" uint32_t CRC32C(unsigned char* data, size_t dataSize);
 extern "C" void RomToBigEndian(void* rom, size_t romSize);
-
-using FsPath = std::filesystem::path::string_type;
 
 static constexpr uint32_t OOT_NTSC_10 = 0xEC7011B7;
 static constexpr uint32_t OOT_NTSC_11 = 0xD43DA81F;
@@ -116,25 +117,12 @@ enum class ButtonId : int {
     FIND,
 };
 
-enum class BoxReadResult : int {
-    SUCCESS,
-    FAIL_NO_FILE,
-    FAIL_BAD_DATA,
-};
-
-enum class MsgBoxType : int {
-    YESNO,
-    ROM,
-};
-
 class Extractor {
     std::unique_ptr<unsigned char[]> mRomData = std::make_unique<unsigned char[]>(MB64);
-    FsPath mCurrentRomPath;
+    std::string mCurrentRomPath;
     size_t mCurRomSize = 0;
 
-#ifdef _WIN32
     bool GetRomPathFromBox();
-#endif
 
     uint32_t GetRomVerCrc();
     size_t GetCurRomSize();
@@ -146,10 +134,10 @@ class Extractor {
     bool IsMasterQuest();
     void CallZapd();
 
-    int CreateYesNoBox();
-    void SetRomInfo(const FsPath& path);
+    int ShowYesNoBox(const char* title, const char* text);
+    void SetRomInfo(const std::string& path);
 
-    void GetRoms(std::vector<FsPath>& roms);
+    void GetRoms(std::vector<std::string>& roms);
     void ShowSizeErrorBox();
     void ShowCrcErrorBox();
     int ShowRomPickBox(uint32_t verCrc);
@@ -160,16 +148,10 @@ class Extractor {
 };
 
 void Extractor::ShowSizeErrorBox() {
-    char boxBuffer[MAX_PATH + 100];
-#ifdef _WIN32
-    snprintf(boxBuffer, MAX_PATH, "The rom file %ls was not a valid size. Was %zu MB, expecting 32, 54, or 64MB.",
-             mCurrentRomPath.c_str(), mCurRomSize / MB_BASE);
-    MessageBoxA(nullptr, boxBuffer, "Invalid Rom Size", MB_ICONERROR | MB_OK);
-#else
-    snprintf(boxBuffer, MAX_PATH, "The rom file %s was not a valid size. Was %zu MB, expecting 32, 54, or 64MB.",
+    char boxBuffer[mCurrentRomPath.size() + 100];
+    snprintf(boxBuffer, mCurrentRomPath.size() + 100, "The rom file %s was not a valid size. Was %zu MB, expecting 32, 54, or 64MB.",
              mCurrentRomPath.c_str(), mCurRomSize / MB_BASE);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Invalid Rom Size", boxBuffer, nullptr);
-#endif
 }
 
 void Extractor::ShowCrcErrorBox() {
@@ -178,7 +160,7 @@ void Extractor::ShowCrcErrorBox() {
 }
 
 int Extractor::ShowRomPickBox(uint32_t verCrc) {
-    char buffer[MAX_PATH + 100];
+    char buffer[mCurrentRomPath.size() + 100];
     SDL_MessageBoxData boxData = { 0 };
     SDL_MessageBoxButtonData buttons[3] = { { 0 } };
     int ret;
@@ -189,37 +171,48 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) {
     buttons[1].buttonid = 1;
     buttons[1].text = "No";
     buttons[1].flags = SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT;
-    boxData.numbuttons = 2;
-// TODO: File box on other platforms.
-#ifdef _WIN32
     buttons[2].buttonid = 2;
     buttons[2].text = "Find ROM";
     boxData.numbuttons = 3;
-#endif
     boxData.flags = SDL_MESSAGEBOX_INFORMATION;
     boxData.message = buffer;
     boxData.title = "Rom Detected";
     boxData.window = nullptr;
 
     boxData.buttons = buttons;
-#ifdef _WIN32
-    snprintf(buffer, sizeof(buffer), "Rom detected: %ls, Header CRC32: %8X. It appears to be: %s. Use this rom?",
-             mCurrentRomPath.c_str(), verCrc, verMap.at(verCrc));
-#else
     snprintf(buffer, sizeof(buffer), "Rom detected: %s, Header CRC32: %8X. It appears to be: %s. Use this rom?",
              mCurrentRomPath.c_str(), verCrc, verMap.at(verCrc));
-#endif
 
     SDL_ShowMessageBox(&boxData, &ret);
     return ret;
 }
 
-void Extractor::SetRomInfo(const FsPath& path) {
+int Extractor::ShowYesNoBox(const char* title, const char* box) {
+    SDL_MessageBoxData boxData = { 0 };
+    SDL_MessageBoxButtonData buttons[2] = { { 0 } };
+    int ret;
+
+    buttons[0].buttonid = IDYES;
+    buttons[0].text = "Yes";
+    buttons[0].flags = SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT;
+    buttons[1].buttonid = IDNO;
+    buttons[1].text = "No";
+    buttons[1].flags = SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT;
+    boxData.numbuttons = 2;
+    boxData.flags = SDL_MESSAGEBOX_INFORMATION;
+    boxData.message = box;
+    boxData.title = title;
+    boxData.buttons = buttons;
+    SDL_ShowMessageBox(&boxData, &ret);
+    return ret;
+}
+
+void Extractor::SetRomInfo(const std::string& path) {
     mCurrentRomPath = path;
     mCurRomSize = GetCurRomSize();
 }
 
-void Extractor::GetRoms(std::vector<FsPath>& roms) {
+void Extractor::GetRoms(std::vector<std::string>& roms) {
 #ifdef _WIN32
     WIN32_FIND_DATA ffd;
     HANDLE h = FindFirstFile(L"\\*", &ffd);
@@ -227,23 +220,30 @@ void Extractor::GetRoms(std::vector<FsPath>& roms) {
     do {
         if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
             wchar_t* ext = PathFindExtension(ffd.cFileName);
+
+            // Check for any standard N64 rom file extensions.
             if ((wcscmp(ext, L".z64") == 0) || (wcscmp(ext, L".v64") == 0) || (wcscmp(ext, L".n64") == 0))
                 roms.push_back(ffd.cFileName);
         }
     } while (FindNextFile(h, &ffd) != 0);
+    CloseHandle(h);
 #elif unix
-    DIR* d;
+    // Open the directory of the app.
+    DIR* d = opendir(".");
     struct dirent* dir;
 
-    d = opendir(".");
-
     if(d != NULL) {
+        // Go through each file in the directory
         while((dir = readdir(d)) != NULL) {
             struct stat path;
+
+            //Check if current entry is not folder
             stat(dir->d_name, &path);
             if(S_ISREG(path.st_mode)) {
+
+                //Get the position of the extension character.
                 char* ext = strchr(dir->d_name, '.');
-                if(ext != NULL && strcmp(ext, ".z64") == 0) {
+                if(ext != NULL && (strcmp(ext, ".z64") == 0) && (strcmp(ext, ".n64") == 0) && (strcmp(ext, ".v64") == 0)) {
                     roms.push_back(dir->d_name);
                 }
             }
@@ -262,47 +262,17 @@ void Extractor::GetRoms(std::vector<FsPath>& roms) {
 #endif
 }
 
-#ifdef _WIN32
 bool Extractor::GetRomPathFromBox() {
-    OPENFILENAME box = { 0 };
-    wchar_t nameBuffer[512];
-    nameBuffer[0] = 0;
+    auto selection = pfd::open_file("Select a file", ".", {"N64 Roms", "*.z64 *.n64 *.v64"}).result();
 
-    box.lStructSize = sizeof(box);
-    box.lpstrFile = nameBuffer;
-    box.nMaxFile = sizeof(nameBuffer) / sizeof(nameBuffer[0]);
-    box.lpstrTitle = L"Open Rom";
-    box.Flags = OFN_ENABLESIZING | OFN_FILEMUSTEXIST | OFN_LONGNAMES | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-    box.lpstrFilter = L"N64 Roms\0*.z64;*.v64;*.n64\0\0";
-    if (!GetOpenFileName(&box)) {
-        DWORD err = CommDlgExtendedError();
-        // GetOpenFileName will return 0 but no error is set if the user just closes the box.
-        if (err != 0) {
-            const char* errStr = nullptr;
-            switch (err) {
-                case FNERR_BUFFERTOOSMALL:
-                    errStr = "Path buffer too small. Move file closer to root of your drive";
-                    break;
-                case FNERR_INVALIDFILENAME:
-                    errStr = "File name for rom provided is invalid.";
-                    break;
-                case FNERR_SUBCLASSFAILURE:
-                    errStr = "Failed to open a filebox because there is not enough RAM to do so.";
-                    break;
-            }
-            MessageBoxA(nullptr, "Box Error", errStr, MB_OK | MB_ICONERROR);
-            return false;
-        }
-    }
-    // The box was closed without something being selected.
-    if (nameBuffer[0] == 0) {
+    if(selection.empty()) {
         return false;
     }
-    mCurrentRomPath = nameBuffer;
+    
+    mCurrentRomPath = selection[0];
     mCurRomSize = GetCurRomSize();
     return true;
 }
-#endif
 uint32_t Extractor::GetRomVerCrc() {
     return _byteswap_ulong(((uint32_t*)mRomData.get())[4]);
 }
@@ -347,20 +317,19 @@ bool Extractor::ValidateRom(bool skipCrcTextBox) {
 }
 
 bool Extractor::Run() {
-    std::vector<FsPath> roms;
+    std::vector<std::string> roms;
     std::ifstream inFile;
     uint32_t verCrc;
 
     GetRoms(roms);
 
     if (roms.empty()) {
-#ifdef _WIN32
-        int ret = MessageBoxA(nullptr, "No roms found in this folder. Search for one somewhere else?", "No roms found",
-                              MB_YESNO | MB_ICONERROR);
+        int ret = ShowYesNoBox("No roms found", "No roms found. Look for one?");
+
         switch (ret) {
             case IDYES:
                 if (!GetRomPathFromBox()) {
-                    MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
+                    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,  "No rom selected", "No rom selected. Exiting", nullptr);
                     return false;
                 }
                 inFile.open(mCurrentRomPath, std::ios::in | std::ios::binary);
@@ -373,18 +342,16 @@ bool Extractor::Run() {
                 }
                 break;
             case IDNO:
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,  "No rom selected", "No rom selected. Exiting", nullptr);
                 return false;
             default:
-                ASSUME(0);
+                UNREACHABLE;
         }
-#else
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No roms found",
-                                 "No roms found in this folder. Please move one here.", nullptr);
-#endif
     }
 
     for (const auto& rom : roms) {
         int option;
+
         SetRomInfo(rom);
         if (inFile.is_open()) {
             inFile.close();
@@ -417,10 +384,10 @@ bool Extractor::Run() {
             }
             break;
         }
-#ifdef _WIN32
         else if (option == (int)ButtonId::FIND) {
             if (!GetRomPathFromBox()) {
-                MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "No rom selected", "No Rom selected. Exiting", nullptr);
+                //MessageBoxA(nullptr, "No rom selected. Exiting", "No rom selected", MB_OK | MB_ICONERROR);
                 return false;
             }
             inFile.open(mCurrentRomPath, std::ios::in | std::ios::binary);
@@ -433,7 +400,6 @@ bool Extractor::Run() {
             }
             break;
         }
-#endif
         else if (option == (int)ButtonId::NO) {
             inFile.close();
             if (rom == roms.back()) {
@@ -455,7 +421,7 @@ bool Extractor::IsMasterQuest() {
         case OOT_PAL_GC_DBG1:
             return false;
         default:
-            ASSUME(0);
+            UNREACHABLE;
     }
 }
 
@@ -469,7 +435,7 @@ const char* Extractor::GetZapdVerStr() {
             return "GC_MQ_D";
         default:
             // We should never be in a state where this path happens.
-            ASSUME(0);
+            UNREACHABLE;
     }
 }
 
@@ -479,18 +445,10 @@ const char* Extractor::GetZapdStr() {
     const char* verStr = GetZapdVerStr();
 
 // TODO anything would be better than this
-#ifdef _WIN32
-    snprintf(
-        zapdCall, ZAPD_STR_SIZE,
-        "ed -i assets/extractor/xmls/%s -b %ls -fl assets/extractor/filelists -o placeholder -osf placeholder -gsf "
-        "1 -rconf assets/extractor/Config_%s.xml -se OTR --otrfile %s",
-        verStr, mCurrentRomPath.c_str(), verStr, IsMasterQuest() ? "oot-mq.otr" : "oot.otr");
-#else
     snprintf(zapdCall, ZAPD_STR_SIZE,
              "ed -i assets/extractor/xmls/%s -b %s -fl assets/extractor/filelists -o placeholder -osf placeholder -gsf "
              "1 -rconf assets/extractor/Config_%s.xml -se OTR --otrfile %s",
              verStr, mCurrentRomPath.c_str(), verStr, IsMasterQuest() ? "oot-mq.otr" : "oot.otr");
-#endif
 
     return zapdCall;
 }
@@ -498,6 +456,11 @@ const char* Extractor::GetZapdStr() {
 int main() {
     Extractor e;
     bool valid = e.Run();
-    const char* zapd = e.GetZapdStr();
-    printf("ZAPD: %s", zapd);
+    if(valid) {
+        const char* zapd = e.GetZapdStr();
+        printf("ZAPD: %s", zapd);
+        pfd::notify("Extraction complete", "Extraction complete\n");
+    } else {
+        printf("No rom found\n");
+    }
 }
