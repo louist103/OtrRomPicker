@@ -37,7 +37,7 @@ jobs:
 
       - name : InstallSDL
         run: |
-          sudo apt install libsdl2-dev
+          sudo apt update && sudo apt install libsdl2-dev
 
       - name : Build
         run: |
